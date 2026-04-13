@@ -8,9 +8,12 @@
 const http = require("http");
 const cfg  = require("./config.json").tally;
 
-const COMPANY = cfg.company;
-const HOST    = cfg.host;
-const PORT    = cfg.port;
+const COMPANY   = cfg.company;
+const HOST      = cfg.host;
+const PORT      = cfg.port;
+const FY_START  = cfg.fyStart  || "20250401";
+const CASH_LED  = cfg.cashLedger || "Cash";
+const BANK_LED  = cfg.bankLedger || "HDFC Bank";
 
 // ── Low-level XML POST ────────────────────────────────────────
 function postXml(xml) {
@@ -42,10 +45,15 @@ function ok(xml) {
   return true;
 }
 
-// Extract a single tag value: <TAGNAME>value</TAGNAME>
+// Extract a single tag value
 function extractTag(xml, tag) {
-  const m = new RegExp(`<${tag}>([^<]+)<\/${tag}>`, "i").exec(xml);
+  const m = new RegExp(`<${tag}[^>]*>([^<]+)<\/${tag}>`, "i").exec(xml);
   return m ? m[1].trim() : null;
+}
+
+// Today as YYYYMMDD for Tally date fields
+function todayTally() {
+  return new Date().toISOString().slice(0, 10).replace(/-/g, "");
 }
 
 // ── Generic collection fetch (names only) ────────────────────
@@ -76,20 +84,16 @@ async function fetchCollection(collId, type) {
 </ENVELOPE>`.trim();
 
   const response = await postXml(xml);
-
   if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
     throw new Error(`Tally rejected ${type} request: ` + response.slice(0, 300));
   }
 
   const names = new Set();
-  // Attribute form: <STOCKITEM NAME="..."> or <LEDGER NAME="...">
   const attrRe = /(?:STOCKITEM|LEDGER|ITEM)\s+NAME="([^"]+)"/gi;
   let m;
   while ((m = attrRe.exec(response)) !== null) names.add(m[1].trim());
-  // Element form: <NAME>...</NAME>
   const elemRe = /<NAME>([^<]+)<\/NAME>/gi;
   while ((m = elemRe.exec(response)) !== null) names.add(m[1].trim());
-
   return [...names].filter(Boolean);
 }
 
@@ -107,15 +111,15 @@ async function getAllLedgers() {
   return names;
 }
 
-// ── Export dealer ledgers (Sundry Debtors) with full details ──
-async function getDealerLedgers() {
+// ── Generic ledger fetch with full details ─────────────────────
+async function fetchLedgerGroup(collId, childOf) {
   const xml = `
 <ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
     <TYPE>Collection</TYPE>
-    <ID>KMTDealers</ID>
+    <ID>${collId}</ID>
   </HEADER>
   <BODY>
     <DESC>
@@ -124,9 +128,9 @@ async function getDealerLedgers() {
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
-          <COLLECTION NAME="KMTDealers" ISINITIALIZE="Yes">
+          <COLLECTION NAME="${collId}" ISINITIALIZE="Yes">
             <TYPE>Ledger</TYPE>
-            <CHILDOF>Sundry Debtors</CHILDOF>
+            <CHILDOF>${childOf}</CHILDOF>
             <NATIVEMETHOD>Name</NATIVEMETHOD>
             <NATIVEMETHOD>MailingName</NATIVEMETHOD>
             <NATIVEMETHOD>LedgerPhone</NATIVEMETHOD>
@@ -153,17 +157,11 @@ async function getDealerLedgers() {
 </ENVELOPE>`.trim();
 
   const response = await postXml(xml);
-
   if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
-    throw new Error("Tally rejected dealer request: " + response.slice(0, 300));
+    throw new Error(`Tally rejected ${childOf} ledger request: ` + response.slice(0, 300));
   }
 
-  // Debug: print first LEDGER block to see actual tag names
-  const firstBlock = /<LEDGER\s[^>]+>[\s\S]*?<\/LEDGER>/i.exec(response);
-  if (firstBlock) console.log("[DEBUG] First LEDGER block:\n", firstBlock[0].slice(0, 2000));
-
-  // Parse each LEDGER block
-  const dealers = [];
+  const results = [];
   const ledgerRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
   let m;
   while ((m = ledgerRe.exec(response)) !== null) {
@@ -175,7 +173,7 @@ async function getDealerLedgers() {
       return r ? r[1].trim() : null;
     };
 
-    // Address can be multi-line: collect all <ADDRESS> elements
+    // Address lines
     const addrLines = [];
     const addrRe = /<ADDRESS[^>]*>([^<]+)<\/ADDRESS>/gi;
     let a;
@@ -184,20 +182,19 @@ async function getDealerLedgers() {
       if (line) addrLines.push(line);
     }
 
-    // City: last address line, first comma-segment
     const city = addrLines.length > 0
       ? addrLines[addrLines.length - 1].split(",")[0].trim() || null
       : null;
 
-    // ClosingBalance: positive Dr = dealer owes us, negative Cr = we owe them
+    // Closing balance (Dr = positive = they owe us / we owe them)
     const closingRaw = get("CLOSINGBALANCE") || get("OPENINGBALANCE");
     let outstanding = null;
     if (closingRaw) {
       const num = parseFloat(closingRaw.replace(/[^0-9.\-]/g, ""));
-      if (!isNaN(num)) outstanding = Math.abs(num); // Dr balance = positive outstanding
+      if (!isNaN(num)) outstanding = Math.abs(num);
     }
 
-    // CreditPeriod: Tally stores as number of days e.g. "30 Days"
+    // Credit period (days → "30 days")
     const creditPeriodRaw = get("BILLCREDITPERIOD");
     let paymentTerms = null;
     if (creditPeriodRaw) {
@@ -205,7 +202,7 @@ async function getDealerLedgers() {
       if (!isNaN(days) && days > 0) paymentTerms = `${days} days`;
     }
 
-    // CreditLimit: stored as Amount
+    // Credit limit
     const creditLimitRaw = get("CREDITLIMIT");
     let creditLimit = null;
     if (creditLimitRaw) {
@@ -213,28 +210,172 @@ async function getDealerLedgers() {
       if (!isNaN(num) && num > 0) creditLimit = num;
     }
 
-    dealers.push({
+    results.push({
       name,
-      mailing_name:    get("MAILINGNAME") || name,
-      phone:           get("LEDGERPHONE"),
-      phone2:          get("LEDGERMOBILE"),
-      email:           get("LEDGEREMAIL") || get("EMAIL"),
-      website:         get("WEBSITE"),
-      address:         addrLines.join(", ") || null,
+      mailing_name:  get("MAILINGNAME") || name,
+      phone:         get("LEDGERPHONE"),
+      phone2:        get("LEDGERMOBILE"),
+      email:         get("LEDGEREMAIL") || get("EMAIL"),
+      website:       get("WEBSITE"),
+      address:       addrLines.join(", ") || null,
       city,
-      pincode:         get("PINCODE"),
-      state:           get("LEDSTATENAME") || get("STATENAME"),
-      country:         get("COUNTRYNAME"),
-      gst_number:      get("PARTYGSTIN") || get("GSTREGISTRATIONNUMBER"),
-      pan_number:      get("INCOMETAXNUMBER"),
-      credit_limit:    creditLimit,
-      payment_terms:   paymentTerms,
+      pincode:       get("PINCODE"),
+      state:         get("LEDSTATENAME") || get("STATENAME"),
+      country:       get("COUNTRYNAME"),
+      gst_number:    get("PARTYGSTIN") || get("GSTREGISTRATIONNUMBER"),
+      pan_number:    get("INCOMETAXNUMBER"),
+      credit_limit:  creditLimit,
+      payment_terms: paymentTerms,
       outstanding,
     });
   }
 
+  return results;
+}
+
+// ── Dealers (Sundry Debtors) ──────────────────────────────────
+async function getDealerLedgers() {
+  const dealers = await fetchLedgerGroup("KMTDealers", "Sundry Debtors");
   console.log(`[DEBUG] Parsed ${dealers.length} dealer ledgers`);
   return dealers;
+}
+
+// ── Suppliers (Sundry Creditors) ─────────────────────────────
+async function getSupplierLedgers() {
+  const suppliers = await fetchLedgerGroup("KMTSuppliers", "Sundry Creditors");
+  console.log(`[DEBUG] Parsed ${suppliers.length} supplier ledgers`);
+  return suppliers;
+}
+
+// ── Payment vouchers (Receipts) from Tally ───────────────────
+async function getPaymentVouchers(fromDate, toDate) {
+  const from = (fromDate || FY_START).replace(/-/g, "");
+  const to   = (toDate   || todayTally()).replace(/-/g, "");
+
+  const xml = `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>KMTReceipts</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
+        <SVFROMDATE>${from}</SVFROMDATE>
+        <SVTODATE>${to}</SVTODATE>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="KMTReceipts" ISINITIALIZE="Yes">
+            <TYPE>Voucher</TYPE>
+            <CHILDOF>Receipt</CHILDOF>
+            <NATIVEMETHOD>Date</NATIVEMETHOD>
+            <NATIVEMETHOD>VoucherNumber</NATIVEMETHOD>
+            <NATIVEMETHOD>VoucherTypeName</NATIVEMETHOD>
+            <NATIVEMETHOD>PartyLedgerName</NATIVEMETHOD>
+            <NATIVEMETHOD>Amount</NATIVEMETHOD>
+            <NATIVEMETHOD>Narration</NATIVEMETHOD>
+            <NATIVEMETHOD>Guid</NATIVEMETHOD>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const response = await postXml(xml);
+  if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
+    throw new Error("Tally rejected receipts request: " + response.slice(0, 300));
+  }
+
+  const vouchers = [];
+  const vRe = /<VOUCHER\s+[^>]*>([\s\S]*?)<\/VOUCHER>/gi;
+  let m;
+  while ((m = vRe.exec(response)) !== null) {
+    const block = m[1];
+    const get = (tag) => {
+      const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`, "i").exec(block);
+      return r ? r[1].trim() : null;
+    };
+
+    const dateRaw = get("DATE");
+    const amtRaw  = get("AMOUNT");
+    const guid    = get("GUID");
+    const vchNum  = get("VOUCHERNUMBER");
+    const party   = get("PARTYLEDGERNAME");
+
+    if (!dateRaw || !amtRaw || !party) continue;
+
+    // Date: YYYYMMDD → YYYY-MM-DD
+    const date = dateRaw.length === 8
+      ? `${dateRaw.slice(0,4)}-${dateRaw.slice(4,6)}-${dateRaw.slice(6,8)}`
+      : dateRaw;
+
+    const amount = Math.abs(parseFloat(amtRaw.replace(/[^0-9.\-]/g, "")) || 0);
+    if (amount === 0) continue;
+
+    vouchers.push({
+      tally_voucher_id: guid || vchNum,
+      payment_date:     date,
+      party_ledger:     party,
+      amount,
+      narration:        get("NARRATION"),
+      voucher_number:   vchNum,
+    });
+  }
+
+  console.log(`[DEBUG] Fetched ${vouchers.length} payment receipts from Tally`);
+  return vouchers;
+}
+
+// ── Push payment receipt TO Tally ────────────────────────────
+async function createReceiptVoucher({ date, amount, dealerLedger, mode, reference, narration }) {
+  // Cash or Bank ledger based on payment mode
+  const cashBankLedger = (mode === "cash") ? CASH_LED : BANK_LED;
+  const dateStr = date.replace(/-/g, "");
+  const narr = narration || (reference ? `Payment ref: ${reference}` : "Payment received");
+
+  const xml = `
+<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Vouchers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+    </DESC>
+    <DATA>
+      <TALLYMESSAGE xmlns:UDF="TallyUDF">
+        <VOUCHER VCHTYPE="Receipt" ACTION="Create" OBJVIEW="Accounting Voucher View">
+          <DATE>${dateStr}</DATE>
+          <VOUCHERTYPENAME>Receipt</VOUCHERTYPENAME>
+          <NARRATION>${narr}</NARRATION>
+          <ALLLEDGERENTRIES.LIST>
+            <LEDGERNAME>${cashBankLedger}</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+            <AMOUNT>-${amount}</AMOUNT>
+          </ALLLEDGERENTRIES.LIST>
+          <ALLLEDGERENTRIES.LIST>
+            <LEDGERNAME>${dealerLedger}</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+            <AMOUNT>${amount}</AMOUNT>
+          </ALLLEDGERENTRIES.LIST>
+        </VOUCHER>
+      </TALLYMESSAGE>
+    </DATA>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const response = await postXml(xml);
+  const voucherId = extractTag(response, "LASTVCHID") || extractTag(response, "VCHKEY");
+  return { success: ok(response), voucherId, raw: response };
 }
 
 // ── Ping ──────────────────────────────────────────────────────
@@ -384,4 +525,14 @@ async function createDeliveryNote({ date, orderRef, rolls, tallyItemName, custom
   return { success: ok(response), voucherId, raw: response };
 }
 
-module.exports = { getAllStockItems, getAllLedgers, getDealerLedgers, createReceiptNote, createDeliveryNote, ping };
+module.exports = {
+  getAllStockItems,
+  getAllLedgers,
+  getDealerLedgers,
+  getSupplierLedgers,
+  getPaymentVouchers,
+  createReceiptVoucher,
+  createReceiptNote,
+  createDeliveryNote,
+  ping,
+};

@@ -2,7 +2,10 @@
   "tally": {
     "host": "localhost",
     "port": 9000,
-    "company": "The Kothari Multitrade (F Y 25-26)"
+    "company": "The Kothari Multitrade (F Y 25-26)",
+    "fyStart": "20250401",
+    "cashLedger": "Cash",
+    "bankLedger": "HDFC Bank"
   },
   "supabase": {
     "url": "https://cyxdyqinnetcbrlnpgyx.supabase.co",
