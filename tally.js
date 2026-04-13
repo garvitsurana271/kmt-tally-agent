@@ -1,11 +1,8 @@
 /**
  * Tally XML Gateway client — TallyPrime HTTP format
  *
- * Reading data: use TYPE=Collection with inline TDL definition.
- * This returns data in the HTTP response body — no file I/O, no Excel popup.
- *
- * Writing data: use TYPE=Data with TALLYMESSAGE (Import).
- * Import requests never trigger file export dialogs.
+ * Reading:  TYPE=Collection + inline TDL → HTTP response only, no file I/O.
+ * Writing:  TYPE=Data + TALLYMESSAGE (Import) → no file dialogs.
  */
 
 const http = require("http");
@@ -15,7 +12,7 @@ const COMPANY = cfg.company;
 const HOST    = cfg.host;
 const PORT    = cfg.port;
 
-// ── Low-level XML POST with timeout ──────────────────────────
+// ── Low-level XML POST ────────────────────────────────────────
 function postXml(xml) {
   return new Promise((resolve, reject) => {
     const buf = Buffer.from(xml, "utf8");
@@ -45,15 +42,21 @@ function ok(xml) {
   return true;
 }
 
-// ── Export all stock items via TDL Collection ─────────────────
-async function getAllStockItems() {
+// Extract a single tag value: <TAGNAME>value</TAGNAME>
+function extractTag(xml, tag) {
+  const m = new RegExp(`<${tag}>([^<]+)<\/${tag}>`, "i").exec(xml);
+  return m ? m[1].trim() : null;
+}
+
+// ── Generic collection fetch (names only) ────────────────────
+async function fetchCollection(collId, type) {
   const xml = `
 <ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
     <TYPE>Collection</TYPE>
-    <ID>KMTStockItems</ID>
+    <ID>${collId}</ID>
   </HEADER>
   <BODY>
     <DESC>
@@ -62,8 +65,8 @@ async function getAllStockItems() {
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
-          <COLLECTION NAME="KMTStockItems" ISINITIALIZE="Yes">
-            <TYPE>Stock Item</TYPE>
+          <COLLECTION NAME="${collId}" ISINITIALIZE="Yes">
+            <TYPE>${type}</TYPE>
             <NATIVEMETHOD>Name</NATIVEMETHOD>
           </COLLECTION>
         </TDLMESSAGE>
@@ -74,31 +77,37 @@ async function getAllStockItems() {
 
   const response = await postXml(xml);
 
-  // Debug: show raw response so we can verify Tally's XML shape
-  console.log("[DEBUG] Tally raw (first 800 chars):\n", response.slice(0, 800));
-
   if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
-    throw new Error("Tally rejected request: " + response.slice(0, 300));
+    throw new Error(`Tally rejected ${type} request: ` + response.slice(0, 300));
   }
 
-  // TallyPrime may return names as:
-  //   <STOCKITEM NAME="ItemName"> attributes, OR
-  //   <NAME>ItemName</NAME> elements inside each object
   const names = new Set();
-
-  // Try attribute form: NAME="..."
-  const attrRe = /(?:STOCKITEM|ITEM)\s+NAME="([^"]+)"/gi;
+  // Attribute form: <STOCKITEM NAME="..."> or <LEDGER NAME="...">
+  const attrRe = /(?:STOCKITEM|LEDGER|ITEM)\s+NAME="([^"]+)"/gi;
   let m;
   while ((m = attrRe.exec(response)) !== null) names.add(m[1].trim());
-
-  // Try element form: <NAME>...</NAME>
+  // Element form: <NAME>...</NAME>
   const elemRe = /<NAME>([^<]+)<\/NAME>/gi;
   while ((m = elemRe.exec(response)) !== null) names.add(m[1].trim());
 
   return [...names].filter(Boolean);
 }
 
-// ── Ping: simple collection request, no file I/O ─────────────
+// ── Export all stock items ────────────────────────────────────
+async function getAllStockItems() {
+  const names = await fetchCollection("KMTStockItems", "Stock Item");
+  console.log(`[DEBUG] Stock items from Tally: ${names.length}`);
+  return names;
+}
+
+// ── Export all ledgers ────────────────────────────────────────
+async function getAllLedgers() {
+  const names = await fetchCollection("KMTLedgers", "Ledger");
+  console.log(`[DEBUG] Ledgers from Tally: ${names.length}`);
+  return names;
+}
+
+// ── Ping ──────────────────────────────────────────────────────
 async function ping() {
   try {
     const xml = `
@@ -106,13 +115,13 @@ async function ping() {
   <HEADER>
     <TALLYREQUEST>Export</TALLYREQUEST>
     <TYPE>Collection</TYPE>
-    <ID>KMT Ping</ID>
+    <ID>KMTPing</ID>
   </HEADER>
   <BODY>
     <DESC>
       <TDL>
         <TDLMESSAGE>
-          <COLLECTION NAME="KMT Ping" ISMODIFY="No" ISFIXED="No" ISKEYFIELD="No" RESERVEDNAME="">
+          <COLLECTION NAME="KMTPing" ISMODIFY="No" ISFIXED="No" ISKEYFIELD="No" RESERVEDNAME="">
             <TYPE>Company</TYPE>
             <FETCH>Name</FETCH>
           </COLLECTION>
@@ -132,7 +141,9 @@ async function ping() {
 }
 
 // ── Create Receipt Note (inward stock) ───────────────────────
-async function createReceiptNote({ date, supplierRef, rolls, tallyItemName }) {
+async function createReceiptNote({ date, supplierRef, rolls, tallyItemName, supplierLedger }) {
+  const ledger = supplierLedger || "Purchase Account";
+
   const batchEntries = rolls.map((r) => `
           <BATCHALLOCATIONS.LIST>
             <BATCHNAME>${r.roll_number}</BATCHNAME>
@@ -162,7 +173,7 @@ async function createReceiptNote({ date, supplierRef, rolls, tallyItemName }) {
           <NARRATION>${supplierRef}</NARRATION>
           <ISINVOICE>Yes</ISINVOICE>
           <ALLLEDGERENTRIES.LIST>
-            <LEDGERNAME>Purchase Account</LEDGERNAME>
+            <LEDGERNAME>${ledger}</LEDGERNAME>
             <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
             <AMOUNT>0</AMOUNT>
           </ALLLEDGERENTRIES.LIST>
@@ -182,11 +193,14 @@ async function createReceiptNote({ date, supplierRef, rolls, tallyItemName }) {
 </ENVELOPE>`.trim();
 
   const response = await postXml(xml);
-  return { success: ok(response), raw: response };
+  const voucherId = extractTag(response, "LASTVCHID") || extractTag(response, "VCHKEY");
+  return { success: ok(response), voucherId, raw: response };
 }
 
 // ── Create Delivery Note (outward dispatch) ───────────────────
-async function createDeliveryNote({ date, orderRef, rolls, tallyItemName }) {
+async function createDeliveryNote({ date, orderRef, rolls, tallyItemName, customerLedger }) {
+  const ledger = customerLedger || "Sales Account";
+
   const batchEntries = rolls.map((r) => `
           <BATCHALLOCATIONS.LIST>
             <BATCHNAME>${r.roll_number}</BATCHNAME>
@@ -216,7 +230,7 @@ async function createDeliveryNote({ date, orderRef, rolls, tallyItemName }) {
           <NARRATION>${orderRef || "Dispatch"}</NARRATION>
           <ISINVOICE>Yes</ISINVOICE>
           <ALLLEDGERENTRIES.LIST>
-            <LEDGERNAME>Sales Account</LEDGERNAME>
+            <LEDGERNAME>${ledger}</LEDGERNAME>
             <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
             <AMOUNT>0</AMOUNT>
           </ALLLEDGERENTRIES.LIST>
@@ -236,7 +250,8 @@ async function createDeliveryNote({ date, orderRef, rolls, tallyItemName }) {
 </ENVELOPE>`.trim();
 
   const response = await postXml(xml);
-  return { success: ok(response), raw: response };
+  const voucherId = extractTag(response, "LASTVCHID") || extractTag(response, "VCHKEY");
+  return { success: ok(response), voucherId, raw: response };
 }
 
-module.exports = { getAllStockItems, createReceiptNote, createDeliveryNote, ping };
+module.exports = { getAllStockItems, getAllLedgers, createReceiptNote, createDeliveryNote, ping };

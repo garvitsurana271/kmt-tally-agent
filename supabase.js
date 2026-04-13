@@ -1,6 +1,5 @@
 /**
- * Supabase client for the Tally agent
- * Uses service role key — runs only on the local office PC, never exposed.
+ * Supabase client for the Tally agent (service role — office PC only).
  */
 
 const https = require("https");
@@ -31,23 +30,55 @@ function request(method, path, body) {
         catch { resolve({ status: res.statusCode, data: d }); }
       });
     });
-    req.setTimeout(15000, () => { req.destroy(); reject(new Error(`Supabase request timed out: ${method} ${path}`)); });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error(`Supabase timeout: ${method} ${path}`)); });
     req.on("error", reject);
     if (data) req.write(data);
     req.end();
   });
 }
 
-// Fetch pending inward rolls (grouped by consignment)
+// ── Stock items ───────────────────────────────────────────────
+async function upsertTallyStockItems(names) {
+  const rows = names.map((name) => ({ tally_item_name: name }));
+  return request("POST", "tally_stock_items?on_conflict=tally_item_name", rows);
+}
+
+// ── Ledgers ───────────────────────────────────────────────────
+async function upsertTallyLedgers(names) {
+  const rows = names.map((name) => ({ tally_ledger_name: name }));
+  return request("POST", "tally_ledgers?on_conflict=tally_ledger_name", rows);
+}
+
+// ── Supplier map (our supplier name → Tally ledger name) ──────
+async function getSupplierMap() {
+  const { data } = await request("GET", "tally_suppliers_map?select=supplier,tally_ledger_name", null);
+  const map = {};
+  if (Array.isArray(data)) {
+    for (const row of data) map[row.supplier] = row.tally_ledger_name;
+  }
+  return map;
+}
+
+// ── Tally item map (product|design_code → Tally stock item) ───
+async function getTallyItemMap() {
+  const { data } = await request("GET", "tally_items_map?select=product,design_code,tally_item_name", null);
+  const map = {};
+  if (Array.isArray(data)) {
+    for (const row of data) map[`${row.product}|${row.design_code}`] = row.tally_item_name;
+  }
+  return map;
+}
+
+// ── Pending inward consignments with their rolls ──────────────
 async function getPendingInwardConsignments() {
   const { data } = await request("GET",
-    "consignments?tally_sync_status=eq.pending&select=id,supplier_ref,inward_date,rolls(roll_number,product,thickness,design_code,sqm,grade,tally_sync_status)&rolls.tally_sync_status=eq.pending",
+    "consignments?tally_sync_status=eq.pending&select=id,supplier_ref,supplier,inward_date,rolls(roll_number,product,thickness,design_code,sqm,grade,tally_sync_status)&rolls.tally_sync_status=eq.pending",
     null
   );
   return Array.isArray(data) ? data : [];
 }
 
-// Fetch pending dispatched rolls
+// ── Pending dispatched rolls ──────────────────────────────────
 async function getPendingDispatchedRolls() {
   const { data } = await request("GET",
     "rolls?status=eq.dispatched&tally_sync_status=eq.pending&select=roll_number,product,thickness,design_code,sqm,dispatch_date,dispatch_order_id",
@@ -56,28 +87,7 @@ async function getPendingDispatchedRolls() {
   return Array.isArray(data) ? data : [];
 }
 
-// Fetch tally item mapping
-async function getTallyItemMap() {
-  const { data } = await request("GET",
-    "tally_items_map?select=product,design_code,tally_item_name",
-    null
-  );
-  const map = {};
-  if (Array.isArray(data)) {
-    for (const row of data) {
-      map[`${row.product}|${row.design_code}`] = row.tally_item_name;
-    }
-  }
-  return map;
-}
-
-// Save Tally stock items to DB (for mapping UI)
-async function upsertTallyStockItems(names) {
-  const rows = names.map((name) => ({ tally_item_name: name }));
-  return request("POST", "tally_stock_items", rows);
-}
-
-// Mark rolls as synced
+// ── Mark rolls synced / failed ────────────────────────────────
 async function markRollsSynced(rollNumbers) {
   return request("PATCH",
     `rolls?roll_number=in.(${rollNumbers.map((r) => `"${r}"`).join(",")})`,
@@ -85,7 +95,6 @@ async function markRollsSynced(rollNumbers) {
   );
 }
 
-// Mark rolls as failed
 async function markRollsFailed(rollNumbers) {
   return request("PATCH",
     `rolls?roll_number=in.(${rollNumbers.map((r) => `"${r}"`).join(",")})`,
@@ -93,7 +102,7 @@ async function markRollsFailed(rollNumbers) {
   );
 }
 
-// Mark consignment synced
+// ── Mark consignment synced (stores voucher ID if returned) ───
 async function markConsignmentSynced(id, voucherId) {
   return request("PATCH",
     `consignments?id=eq.${id}`,
@@ -102,10 +111,12 @@ async function markConsignmentSynced(id, voucherId) {
 }
 
 module.exports = {
+  upsertTallyStockItems,
+  upsertTallyLedgers,
+  getSupplierMap,
+  getTallyItemMap,
   getPendingInwardConsignments,
   getPendingDispatchedRolls,
-  getTallyItemMap,
-  upsertTallyStockItems,
   markRollsSynced,
   markRollsFailed,
   markConsignmentSynced,

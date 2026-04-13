@@ -2,13 +2,10 @@
  * KMT Tally Sync Agent
  *
  * Runs on the office PC. Every 30 seconds:
- *   1. Syncs all Tally stock items → Supabase (for mapping UI)
- *   2. Finds pending inward consignments → creates Receipt Notes in Tally
- *   3. Finds pending dispatched rolls → creates Delivery Notes in Tally
- *
- * Usage:
- *   node agent.js          (foreground, shows logs)
- *   node agent.js --silent (background/service mode)
+ *   1. Syncs Tally stock items → Supabase (for product mapping UI)
+ *   2. Syncs Tally ledgers → Supabase (for supplier/customer mapping UI)
+ *   3. Pending inward consignments → Receipt Notes in Tally
+ *   4. Pending dispatched rolls → Delivery Notes in Tally
  */
 
 const tally    = require("./tally");
@@ -21,12 +18,11 @@ const silent   = process.argv.includes("--silent");
 function log(...args) {
   if (!silent) console.log(new Date().toLocaleTimeString("en-IN"), ...args);
 }
-
 function err(...args) {
   console.error(new Date().toLocaleTimeString("en-IN"), "[ERR]", ...args);
 }
 
-// ── Stock item sync (runs once at startup, then every 10 min) ─
+// ── Stock item sync (once at startup, then every 10 min) ──────
 let lastItemSync = 0;
 async function syncStockItems() {
   if (Date.now() - lastItemSync < 10 * 60 * 1000) return;
@@ -45,19 +41,46 @@ async function syncStockItems() {
   }
 }
 
+// ── Ledger sync (once at startup, then every 10 min) ──────────
+let lastLedgerSync = 0;
+async function syncLedgers() {
+  if (Date.now() - lastLedgerSync < 10 * 60 * 1000) return;
+  try {
+    log("Fetching ledgers from Tally…");
+    const names = await tally.getAllLedgers();
+    log(`Got ${names.length} ledgers from Tally`);
+    if (names.length > 0) {
+      const res = await db.upsertTallyLedgers(names);
+      log(`Ledgers synced: ${names.length} (HTTP ${res.status})`);
+    }
+    lastLedgerSync = Date.now();
+  } catch (e) {
+    err("Ledger sync failed:", e.message);
+  }
+}
+
 // ── Inward sync (pending consignments → Receipt Notes) ────────
 async function syncInward() {
   const consignments = await db.getPendingInwardConsignments();
   if (!consignments.length) return;
 
-  const itemMap = await db.getTallyItemMap();
+  const [itemMap, supplierMap] = await Promise.all([
+    db.getTallyItemMap(),
+    db.getSupplierMap(),
+  ]);
   log(`Inward: ${consignments.length} consignment(s) pending`);
 
   for (const c of consignments) {
     const rolls = c.rolls ?? [];
     if (!rolls.length) continue;
 
-    // Group rolls by (product, design_code) → each group = one inventory line
+    // Look up the supplier ledger (falls back to "Purchase Account" if not mapped)
+    const supplierLedger = supplierMap[c.supplier] || null;
+    if (!supplierLedger) {
+      log(`No supplier ledger mapped for "${c.supplier}" — using Purchase Account. Map it in Admin → Tally Bridge.`);
+    }
+
+    // Group rolls by (product, design_code) → one inventory line per group
     const groups = {};
     for (const r of rolls) {
       const key = `${r.product}|${r.design_code}`;
@@ -70,7 +93,7 @@ async function syncInward() {
     for (const [key, groupRolls] of Object.entries(groups)) {
       const tallyItemName = itemMap[key];
       if (!tallyItemName) {
-        err(`No Tally mapping for ${key} — skipping. Set it in Admin → Tally Bridge → Mapping`);
+        err(`No Tally mapping for ${key} — skipping. Set it in Admin → Tally Bridge.`);
         consignmentOk = false;
         continue;
       }
@@ -80,11 +103,12 @@ async function syncInward() {
         supplierRef: c.supplier_ref,
         rolls: groupRolls,
         tallyItemName,
+        supplierLedger,
       });
 
       if (result.success) {
         await db.markRollsSynced(groupRolls.map((r) => r.roll_number));
-        log(`Receipt Note created: ${c.supplier_ref} | ${tallyItemName} | ${groupRolls.length} rolls`);
+        log(`Receipt Note: ${c.supplier_ref} | ${tallyItemName} | ${groupRolls.length} rolls${result.voucherId ? ` | ID: ${result.voucherId}` : ""}`);
       } else {
         await db.markRollsFailed(groupRolls.map((r) => r.roll_number));
         err(`Receipt Note failed: ${c.supplier_ref} | ${tallyItemName}`, result.raw?.slice(0, 200));
@@ -132,7 +156,7 @@ async function syncOutward() {
 
     if (result.success) {
       await db.markRollsSynced(groupRolls.map((r) => r.roll_number));
-      log(`Delivery Note created: ${tallyItemName} | ${groupRolls.length} rolls | ${date}`);
+      log(`Delivery Note: ${tallyItemName} | ${groupRolls.length} rolls | ${date}${result.voucherId ? ` | ID: ${result.voucherId}` : ""}`);
     } else {
       await db.markRollsFailed(groupRolls.map((r) => r.roll_number));
       err(`Delivery Note failed: ${tallyItemName}`, result.raw?.slice(0, 200));
@@ -154,6 +178,7 @@ async function run() {
   async function tick() {
     try {
       await syncStockItems();
+      await syncLedgers();
       await syncInward();
       await syncOutward();
     } catch (e) {
