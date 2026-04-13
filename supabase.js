@@ -97,15 +97,23 @@ async function upsertDealers(dealers) {
   // Map Tally fields → dealers table columns
   const now = new Date().toISOString();
   const rows = dealers.map((d) => ({
-    name:              d.mailing_name || d.name,
-    phone:             d.phone || null,
-    email:             d.email || null,
-    city:              d.city || null,
-    address:           d.address || null,
-    state:             d.state || null,
-    gst_number:        d.gst_number || null,
+    name:                 d.mailing_name || d.name,
+    phone:                d.phone || null,
+    phone2:               d.phone2 || null,
+    email:                d.email || null,
+    city:                 d.city || null,
+    address:              d.address || null,
+    state:                d.state || null,
+    gst_number:           d.gst_number || null,
+    notes:                [
+      d.pan_number   ? `PAN: ${d.pan_number}`   : null,
+      d.website      ? `Web: ${d.website}`      : null,
+      d.country && d.country !== "India" ? `Country: ${d.country}` : null,
+    ].filter(Boolean).join(" | ") || null,
+    ...(d.credit_limit   != null ? { credit_limit:   d.credit_limit }   : {}),
+    ...(d.payment_terms  != null ? { payment_terms:  d.payment_terms }  : {}),
+    ...(d.outstanding    != null ? { current_outstanding: d.outstanding } : {}),
     status:               "active",
-    current_outstanding:  0,
     tally_ledger_name:    d.name,
     updated_at:           now,
   }));

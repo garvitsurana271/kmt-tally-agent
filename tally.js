@@ -130,14 +130,21 @@ async function getDealerLedgers() {
             <NATIVEMETHOD>Name</NATIVEMETHOD>
             <NATIVEMETHOD>MailingName</NATIVEMETHOD>
             <NATIVEMETHOD>LedgerPhone</NATIVEMETHOD>
+            <NATIVEMETHOD>LedgerMobile</NATIVEMETHOD>
             <NATIVEMETHOD>LedgerEmail</NATIVEMETHOD>
+            <NATIVEMETHOD>Website</NATIVEMETHOD>
             <NATIVEMETHOD>Address</NATIVEMETHOD>
             <NATIVEMETHOD>PinCode</NATIVEMETHOD>
             <NATIVEMETHOD>StateName</NATIVEMETHOD>
             <NATIVEMETHOD>LedStateName</NATIVEMETHOD>
+            <NATIVEMETHOD>CountryName</NATIVEMETHOD>
             <NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>
             <NATIVEMETHOD>GSTRegistrationNumber</NATIVEMETHOD>
+            <NATIVEMETHOD>IncomeTaxNumber</NATIVEMETHOD>
+            <NATIVEMETHOD>CreditLimit</NATIVEMETHOD>
+            <NATIVEMETHOD>BillCreditPeriod</NATIVEMETHOD>
             <NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+            <NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>
           </COLLECTION>
         </TDLMESSAGE>
       </TDL>
@@ -177,21 +184,52 @@ async function getDealerLedgers() {
       if (line) addrLines.push(line);
     }
 
-    // City is typically the last non-pincode address line
+    // City: last address line, first comma-segment
     const city = addrLines.length > 0
       ? addrLines[addrLines.length - 1].split(",")[0].trim() || null
       : null;
 
+    // ClosingBalance: positive Dr = dealer owes us, negative Cr = we owe them
+    const closingRaw = get("CLOSINGBALANCE") || get("OPENINGBALANCE");
+    let outstanding = null;
+    if (closingRaw) {
+      const num = parseFloat(closingRaw.replace(/[^0-9.\-]/g, ""));
+      if (!isNaN(num)) outstanding = Math.abs(num); // Dr balance = positive outstanding
+    }
+
+    // CreditPeriod: Tally stores as number of days e.g. "30 Days"
+    const creditPeriodRaw = get("BILLCREDITPERIOD");
+    let paymentTerms = null;
+    if (creditPeriodRaw) {
+      const days = parseInt(creditPeriodRaw);
+      if (!isNaN(days) && days > 0) paymentTerms = `${days} days`;
+    }
+
+    // CreditLimit: stored as Amount
+    const creditLimitRaw = get("CREDITLIMIT");
+    let creditLimit = null;
+    if (creditLimitRaw) {
+      const num = parseFloat(creditLimitRaw.replace(/[^0-9.\-]/g, ""));
+      if (!isNaN(num) && num > 0) creditLimit = num;
+    }
+
     dealers.push({
       name,
-      mailing_name:  get("MAILINGNAME") || name,
-      phone:         get("LEDGERPHONE"),
-      email:         get("LEDGEREMAIL") || get("EMAIL"),
-      address:       addrLines.join(", ") || null,
-      city:          city,
-      pincode:       get("PINCODE"),
-      state:         get("LEDSTATENAME") || get("STATENAME"),
-      gst_number:    get("PARTYGSTIN") || get("GSTREGISTRATIONNUMBER"),
+      mailing_name:    get("MAILINGNAME") || name,
+      phone:           get("LEDGERPHONE"),
+      phone2:          get("LEDGERMOBILE"),
+      email:           get("LEDGEREMAIL") || get("EMAIL"),
+      website:         get("WEBSITE"),
+      address:         addrLines.join(", ") || null,
+      city,
+      pincode:         get("PINCODE"),
+      state:           get("LEDSTATENAME") || get("STATENAME"),
+      country:         get("COUNTRYNAME"),
+      gst_number:      get("PARTYGSTIN") || get("GSTREGISTRATIONNUMBER"),
+      pan_number:      get("INCOMETAXNUMBER"),
+      credit_limit:    creditLimit,
+      payment_terms:   paymentTerms,
+      outstanding,
     });
   }
 
