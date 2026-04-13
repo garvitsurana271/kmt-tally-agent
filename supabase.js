@@ -103,9 +103,10 @@ async function upsertDealers(dealers) {
     address:           d.address || null,
     state:             d.state || null,
     gst_number:        d.gst_number || null,
-    status:            "active",
-    tally_ledger_name: d.name,
-    updated_at:        now,
+    status:               "active",
+    current_outstanding:  0,
+    tally_ledger_name:    d.name,
+    updated_at:           now,
   }));
 
   // Batch into 100-row chunks to avoid payload / timeout issues
