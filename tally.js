@@ -46,28 +46,29 @@ function ok(xml) {
 }
 
 // ── Export all stock items via TDL Collection ─────────────────
-// TYPE=Collection + inline TDL = HTTP response only, no file write
 async function getAllStockItems() {
   const xml = `
 <ENVELOPE>
   <HEADER>
+    <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
     <TYPE>Collection</TYPE>
-    <ID>KMT Stock Items</ID>
+    <ID>KMTStockItems</ID>
   </HEADER>
   <BODY>
     <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
-          <COLLECTION NAME="KMT Stock Items" ISMODIFY="No" ISFIXED="No" ISKEYFIELD="No" RESERVEDNAME="">
+          <COLLECTION NAME="KMTStockItems" ISINITIALIZE="Yes">
             <TYPE>Stock Item</TYPE>
-            <FETCH>Name</FETCH>
+            <NATIVEMETHOD>Name</NATIVEMETHOD>
           </COLLECTION>
         </TDLMESSAGE>
       </TDL>
-      <STATICVARIABLES>
-        <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
-      </STATICVARIABLES>
     </DESC>
   </BODY>
 </ENVELOPE>`.trim();
@@ -75,17 +76,22 @@ async function getAllStockItems() {
   const response = await postXml(xml);
 
   // Debug: show raw response so we can verify Tally's XML shape
-  console.log("[DEBUG] Tally raw (first 600 chars):\n", response.slice(0, 600));
+  console.log("[DEBUG] Tally raw (first 800 chars):\n", response.slice(0, 800));
 
-  // Parse NAME attributes from response
+  if (response.includes("UNKNOWN") || response.includes("Error")) {
+    throw new Error("Tally rejected stock items request: " + response.slice(0, 200));
+  }
+
+  // TallyPrime returns <NAME.LIST TYPE="String"><NAME>ItemName</NAME></NAME.LIST>
+  // or sometimes just <NAME>ItemName</NAME> inside each STOCKITEM
   const names = [];
-  const re = /NAME="([^"]+)"/gi;
+  const re = /<NAME>([^<]+)<\/NAME>/gi;
   let m;
   while ((m = re.exec(response)) !== null) {
     const n = m[1].trim();
-    if (n && n !== "KMT Stock Items" && !names.includes(n)) names.push(n);
+    if (n) names.push(n);
   }
-  return names;
+  return [...new Set(names)]; // dedupe
 }
 
 // ── Ping: simple collection request, no file I/O ─────────────
@@ -115,7 +121,7 @@ async function ping() {
   </BODY>
 </ENVELOPE>`.trim();
     const r = await postXml(xml);
-    return r.length > 0 && !r.includes("ODBC Error");
+    return r.length > 0 && !r.includes("ODBC Error") && !r.includes("UNKNOWN");
   } catch {
     return false;
   }
