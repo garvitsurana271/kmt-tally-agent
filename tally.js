@@ -12,8 +12,9 @@ const COMPANY   = cfg.company;
 const HOST      = cfg.host;
 const PORT      = cfg.port;
 const FY_START  = cfg.fyStart  || "20250401";
-const CASH_LED  = cfg.cashLedger || "Cash";
-const BANK_LED  = cfg.bankLedger || "HDFC Bank";
+const CASH_LED   = cfg.cashLedger || "Cash";
+const BANK_LED   = cfg.bankLedger || "HDFC Bank";
+const BANK_LEDS  = cfg.bankLedgers || {};
 
 // ── Low-level XML POST ────────────────────────────────────────
 function postXml(xml) {
@@ -333,8 +334,10 @@ async function getPaymentVouchers(fromDate, toDate) {
 
 // ── Push payment receipt TO Tally ────────────────────────────
 async function createReceiptVoucher({ date, amount, dealerLedger, mode, reference, narration }) {
-  // Cash or Bank ledger based on payment mode
-  const cashBankLedger = (mode === "cash") ? CASH_LED : BANK_LED;
+  // Pick ledger: cash → Cash, hdfc/indian_bank/united_bank → specific bank, default → BANK_LED
+  const cashBankLedger = mode === "cash"
+    ? CASH_LED
+    : (BANK_LEDS[mode] || BANK_LED);
   const dateStr = date.replace(/-/g, "");
   const narr = narration || (reference ? `Payment ref: ${reference}` : "Payment received");
 
