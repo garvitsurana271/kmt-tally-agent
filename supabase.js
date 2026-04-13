@@ -243,6 +243,8 @@ async function upsertStockSummary(items) {
     closing_unit:    item.closing_unit || item.base_units || null,
     opening_qty:     item.opening_qty,
     parent_group:    item.parent || null,
+    selling_price:   item.selling_price ?? null,
+    cost_price:      item.cost_price ?? null,
     updated_at:      now,
   }));
   return batchUpsert("tally_stock_summary?on_conflict=tally_item_name", rows, 100, "stock-summary");

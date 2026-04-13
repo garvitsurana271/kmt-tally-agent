@@ -405,6 +405,8 @@ async function getStockSummary() {
             <NATIVEMETHOD>BaseUnits</NATIVEMETHOD>
             <NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
             <NATIVEMETHOD>ClosingBalance</NATIVEMETHOD>
+            <NATIVEMETHOD>StandardSellingPrice</NATIVEMETHOD>
+            <NATIVEMETHOD>StandardCost</NATIVEMETHOD>
           </COLLECTION>
         </TDLMESSAGE>
       </TDL>
@@ -443,13 +445,22 @@ async function getStockSummary() {
     const closing = parseQtyUnit(get("CLOSINGBALANCE"));
     const opening = parseQtyUnit(get("OPENINGBALANCE"));
 
+    // Standard selling price: "150/SQM" or "150.00" → extract numeric part
+    const parsePrice = (raw) => {
+      if (!raw) return null;
+      const num = parseFloat(raw.replace(/[^0-9.]/g, ""));
+      return isNaN(num) || num === 0 ? null : num;
+    };
+
     items.push({
       name,
-      parent:       get("PARENT"),
-      base_units:   get("BASEUNITS"),
-      closing_qty:  closing.qty,
-      closing_unit: closing.unit,
-      opening_qty:  opening.qty,
+      parent:          get("PARENT"),
+      base_units:      get("BASEUNITS"),
+      closing_qty:     closing.qty,
+      closing_unit:    closing.unit,
+      opening_qty:     opening.qty,
+      selling_price:   parsePrice(get("STANDARDSELLINGPRICE")),
+      cost_price:      parsePrice(get("STANDARDCOST")),
     });
   }
 
