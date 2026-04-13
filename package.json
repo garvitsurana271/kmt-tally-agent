@@ -1,0 +1,13 @@
+{
+  "name": "kmt-tally-agent",
+  "version": "1.0.0",
+  "description": "KMT Tally ↔ Supabase sync agent",
+  "main": "agent.js",
+  "scripts": {
+    "start": "node agent.js",
+    "install-service": "node install-service.js"
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8"
+  }
+}
