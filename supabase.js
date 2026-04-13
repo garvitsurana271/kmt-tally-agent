@@ -95,6 +95,7 @@ async function getSupplierMap() {
 // ── Upsert dealers from Tally (Sundry Debtors ledgers) ────────
 async function upsertDealers(dealers) {
   // Map Tally fields → dealers table columns
+  const now = new Date().toISOString();
   const rows = dealers.map((d) => ({
     name:              d.mailing_name || d.name,
     phone:             d.phone || null,
@@ -104,6 +105,7 @@ async function upsertDealers(dealers) {
     gst_number:        d.gst_number || null,
     status:            "active",
     tally_ledger_name: d.name,
+    updated_at:        now,
   }));
 
   // Batch into 100-row chunks to avoid payload / timeout issues
