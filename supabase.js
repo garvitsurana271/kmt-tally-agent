@@ -37,16 +37,49 @@ function request(method, path, body) {
   });
 }
 
+// ── Upsert helper (adds resolution=merge-duplicates) ─────────
+function requestUpsert(path, body) {
+  return new Promise((resolve, reject) => {
+    const url  = new URL(cfg.url);
+    const data = JSON.stringify(body);
+    const opts = {
+      hostname: url.hostname,
+      port: 443,
+      path: `/rest/v1/${path}`,
+      method: "POST",
+      headers: {
+        "apikey":          cfg.serviceRoleKey,
+        "Authorization":   `Bearer ${cfg.serviceRoleKey}`,
+        "Content-Type":    "application/json",
+        "Content-Length":  Buffer.byteLength(data),
+        "Prefer":          "resolution=merge-duplicates,return=minimal",
+      },
+    };
+    const req = https.request(opts, (res) => {
+      let d = "";
+      res.on("data", (c) => (d += c));
+      res.on("end", () => {
+        try { resolve({ status: res.statusCode, data: JSON.parse(d) }); }
+        catch { resolve({ status: res.statusCode, data: d }); }
+      });
+    });
+    req.setTimeout(15000, () => { req.destroy(); reject(new Error(`Supabase timeout: POST ${path}`)); });
+    req.on("error", reject);
+    req.write(data);
+    req.end();
+  });
+}
+
 // ── Stock items ───────────────────────────────────────────────
 async function upsertTallyStockItems(names) {
   const rows = names.map((name) => ({ tally_item_name: name }));
-  return request("POST", "tally_stock_items?on_conflict=tally_item_name", rows);
+  return requestUpsert("tally_stock_items?on_conflict=tally_item_name", rows);
 }
 
 // ── Ledgers ───────────────────────────────────────────────────
 async function upsertTallyLedgers(names) {
   const rows = names.map((name) => ({ tally_ledger_name: name }));
-  return request("POST", "tally_ledgers?on_conflict=tally_ledger_name", rows);
+  return requestUpsert("tally_ledgers?on_conflict=tally_ledger_name", rows);
 }
 
 // ── Supplier map (our supplier name → Tally ledger name) ──────
@@ -63,17 +96,29 @@ async function getSupplierMap() {
 async function upsertDealers(dealers) {
   // Map Tally fields → dealers table columns
   const rows = dealers.map((d) => ({
-    name:        d.mailing_name || d.name,
-    phone:       d.phone || null,
-    email:       d.email || null,
-    address:     d.address || null,
-    state:       d.state || null,
-    gst_number:  d.gst_number || null,
-    status:      "active",
-    // tally_ledger_name stored so we can match on re-sync
+    name:              d.mailing_name || d.name,
+    phone:             d.phone || null,
+    email:             d.email || null,
+    address:           d.address || null,
+    state:             d.state || null,
+    gst_number:        d.gst_number || null,
+    status:            "active",
     tally_ledger_name: d.name,
   }));
-  return request("POST", "dealers?on_conflict=tally_ledger_name", rows);
+
+  // Batch into 100-row chunks to avoid payload / timeout issues
+  const BATCH = 100;
+  let lastRes;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const chunk = rows.slice(i, i + BATCH);
+    lastRes = await requestUpsert("dealers?on_conflict=tally_ledger_name", chunk);
+    if (lastRes.status >= 400) {
+      console.error("[ERR] dealers upsert batch", i, "→", i + chunk.length,
+        "HTTP", lastRes.status, JSON.stringify(lastRes.data).slice(0, 300));
+      break;
+    }
+  }
+  return lastRes;
 }
 
 // ── Tally item map (product|design_code → Tally stock item) ───
