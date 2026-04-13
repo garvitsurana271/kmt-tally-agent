@@ -130,10 +130,12 @@ async function getDealerLedgers() {
             <NATIVEMETHOD>Name</NATIVEMETHOD>
             <NATIVEMETHOD>MailingName</NATIVEMETHOD>
             <NATIVEMETHOD>LedgerPhone</NATIVEMETHOD>
-            <NATIVEMETHOD>Email</NATIVEMETHOD>
+            <NATIVEMETHOD>LedgerEmail</NATIVEMETHOD>
             <NATIVEMETHOD>Address</NATIVEMETHOD>
             <NATIVEMETHOD>PinCode</NATIVEMETHOD>
             <NATIVEMETHOD>StateName</NATIVEMETHOD>
+            <NATIVEMETHOD>LedStateName</NATIVEMETHOD>
+            <NATIVEMETHOD>PartyGSTIN</NATIVEMETHOD>
             <NATIVEMETHOD>GSTRegistrationNumber</NATIVEMETHOD>
             <NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
           </COLLECTION>
@@ -175,15 +177,21 @@ async function getDealerLedgers() {
       if (line) addrLines.push(line);
     }
 
+    // City is typically the last non-pincode address line
+    const city = addrLines.length > 0
+      ? addrLines[addrLines.length - 1].split(",")[0].trim() || null
+      : null;
+
     dealers.push({
       name,
       mailing_name:  get("MAILINGNAME") || name,
       phone:         get("LEDGERPHONE"),
-      email:         get("EMAIL"),
+      email:         get("LEDGEREMAIL") || get("EMAIL"),
       address:       addrLines.join(", ") || null,
+      city:          city,
       pincode:       get("PINCODE"),
-      state:         get("STATENAME"),
-      gst_number:    get("GSTREGISTRATIONNUMBER"),
+      state:         get("LEDSTATENAME") || get("STATENAME"),
+      gst_number:    get("PARTYGSTIN") || get("GSTREGISTRATIONNUMBER"),
     });
   }
 

@@ -100,6 +100,7 @@ async function upsertDealers(dealers) {
     name:              d.mailing_name || d.name,
     phone:             d.phone || null,
     email:             d.email || null,
+    city:              d.city || null,
     address:           d.address || null,
     state:             d.state || null,
     gst_number:        d.gst_number || null,
