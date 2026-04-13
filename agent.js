@@ -59,6 +59,24 @@ async function syncLedgers() {
   }
 }
 
+// ── Dealer sync (Sundry Debtors → dealers table) ──────────────
+let lastDealerSync = 0;
+async function syncDealers() {
+  if (Date.now() - lastDealerSync < 10 * 60 * 1000) return;
+  try {
+    log("Fetching dealer ledgers from Tally…");
+    const dealers = await tally.getDealerLedgers();
+    log(`Got ${dealers.length} dealers from Tally`);
+    if (dealers.length > 0) {
+      const res = await db.upsertDealers(dealers);
+      log(`Dealers synced: ${dealers.length} (HTTP ${res.status})`);
+    }
+    lastDealerSync = Date.now();
+  } catch (e) {
+    err("Dealer sync failed:", e.message);
+  }
+}
+
 // ── Inward sync (pending consignments → Receipt Notes) ────────
 async function syncInward() {
   const consignments = await db.getPendingInwardConsignments();
@@ -179,6 +197,7 @@ async function run() {
     try {
       await syncStockItems();
       await syncLedgers();
+      await syncDealers();
       await syncInward();
       await syncOutward();
     } catch (e) {

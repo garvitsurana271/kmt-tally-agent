@@ -59,6 +59,23 @@ async function getSupplierMap() {
   return map;
 }
 
+// ── Upsert dealers from Tally (Sundry Debtors ledgers) ────────
+async function upsertDealers(dealers) {
+  // Map Tally fields → dealers table columns
+  const rows = dealers.map((d) => ({
+    name:        d.mailing_name || d.name,
+    phone:       d.phone || null,
+    email:       d.email || null,
+    address:     d.address || null,
+    state:       d.state || null,
+    gst_number:  d.gst_number || null,
+    status:      "active",
+    // tally_ledger_name stored so we can match on re-sync
+    tally_ledger_name: d.name,
+  }));
+  return request("POST", "dealers?on_conflict=tally_ledger_name", rows);
+}
+
 // ── Tally item map (product|design_code → Tally stock item) ───
 async function getTallyItemMap() {
   const { data } = await request("GET", "tally_items_map?select=product,design_code,tally_item_name", null);
@@ -113,6 +130,7 @@ async function markConsignmentSynced(id, voucherId) {
 module.exports = {
   upsertTallyStockItems,
   upsertTallyLedgers,
+  upsertDealers,
   getSupplierMap,
   getTallyItemMap,
   getPendingInwardConsignments,

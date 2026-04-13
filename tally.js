@@ -100,11 +100,94 @@ async function getAllStockItems() {
   return names;
 }
 
-// ── Export all ledgers ────────────────────────────────────────
+// ── Export all ledgers (names only, for mapping UI) ───────────
 async function getAllLedgers() {
   const names = await fetchCollection("KMTLedgers", "Ledger");
   console.log(`[DEBUG] Ledgers from Tally: ${names.length}`);
   return names;
+}
+
+// ── Export dealer ledgers (Sundry Debtors) with full details ──
+async function getDealerLedgers() {
+  const xml = `
+<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>KMTDealers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="KMTDealers" ISINITIALIZE="Yes">
+            <TYPE>Ledger</TYPE>
+            <CHILDOF>Sundry Debtors</CHILDOF>
+            <NATIVEMETHOD>Name</NATIVEMETHOD>
+            <NATIVEMETHOD>MailingName</NATIVEMETHOD>
+            <NATIVEMETHOD>LedgerPhone</NATIVEMETHOD>
+            <NATIVEMETHOD>Email</NATIVEMETHOD>
+            <NATIVEMETHOD>Address</NATIVEMETHOD>
+            <NATIVEMETHOD>PinCode</NATIVEMETHOD>
+            <NATIVEMETHOD>StateName</NATIVEMETHOD>
+            <NATIVEMETHOD>GSTRegistrationNumber</NATIVEMETHOD>
+            <NATIVEMETHOD>OpeningBalance</NATIVEMETHOD>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`.trim();
+
+  const response = await postXml(xml);
+
+  if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
+    throw new Error("Tally rejected dealer request: " + response.slice(0, 300));
+  }
+
+  // Debug first run
+  console.log("[DEBUG] Dealer response (first 1000 chars):\n", response.slice(0, 1000));
+
+  // Parse each LEDGER block
+  const dealers = [];
+  const ledgerRe = /<LEDGER\s+NAME="([^"]+)"[^>]*>([\s\S]*?)<\/LEDGER>/gi;
+  let m;
+  while ((m = ledgerRe.exec(response)) !== null) {
+    const name  = m[1].trim();
+    const block = m[2];
+
+    const get = (tag) => {
+      const r = new RegExp(`<${tag}[^>]*>([^<]*)<\/${tag}>`, "i").exec(block);
+      return r ? r[1].trim() : null;
+    };
+
+    // Address can be multi-line: collect all <ADDRESS> elements
+    const addrLines = [];
+    const addrRe = /<ADDRESS[^>]*>([^<]+)<\/ADDRESS>/gi;
+    let a;
+    while ((a = addrRe.exec(block)) !== null) {
+      const line = a[1].trim();
+      if (line) addrLines.push(line);
+    }
+
+    dealers.push({
+      name,
+      mailing_name:  get("MAILINGNAME") || name,
+      phone:         get("LEDGERPHONE"),
+      email:         get("EMAIL"),
+      address:       addrLines.join(", ") || null,
+      pincode:       get("PINCODE"),
+      state:         get("STATENAME"),
+      gst_number:    get("GSTREGISTRATIONNUMBER"),
+    });
+  }
+
+  console.log(`[DEBUG] Parsed ${dealers.length} dealer ledgers`);
+  return dealers;
 }
 
 // ── Ping ──────────────────────────────────────────────────────
@@ -254,4 +337,4 @@ async function createDeliveryNote({ date, orderRef, rolls, tallyItemName, custom
   return { success: ok(response), voucherId, raw: response };
 }
 
-module.exports = { getAllStockItems, getAllLedgers, createReceiptNote, createDeliveryNote, ping };
+module.exports = { getAllStockItems, getAllLedgers, getDealerLedgers, createReceiptNote, createDeliveryNote, ping };
