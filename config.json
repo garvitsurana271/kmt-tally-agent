@@ -5,7 +5,7 @@
     "company": "The Kothari Multitrade (F Y 25-26)",
     "fyStart": "20250401",
     "cashLedger": "Cash",
-    "bankLedger": "HDFC Bank"
+    "bankLedger": "Cash"
   },
   "supabase": {
     "url": "https://cyxdyqinnetcbrlnpgyx.supabase.co",
