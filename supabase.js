@@ -113,15 +113,17 @@ async function upsertDealers(dealers) {
   // Batch into 100-row chunks to avoid payload / timeout issues
   const BATCH = 100;
   let lastRes;
+  let errCount = 0;
   for (let i = 0; i < rows.length; i += BATCH) {
     const chunk = rows.slice(i, i + BATCH);
     lastRes = await requestUpsert("dealers?on_conflict=tally_ledger_name", chunk);
     if (lastRes.status >= 400) {
       console.error("[ERR] dealers upsert batch", i, "→", i + chunk.length,
         "HTTP", lastRes.status, JSON.stringify(lastRes.data).slice(0, 300));
-      break;
+      errCount++;
     }
   }
+  if (errCount > 0) console.error(`[ERR] ${errCount} dealer batch(es) failed`);
   return lastRes;
 }
 
