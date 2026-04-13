@@ -23,7 +23,7 @@ function postXml(xml) {
       {
         host: HOST, port: PORT, method: "POST", path: "/",
         headers: { "Content-Type": "application/xml", "Content-Length": buf.length },
-        timeout: 15000,
+        timeout: 30000,
       },
       (res) => {
         let data = "";
@@ -58,7 +58,6 @@ async function getAllStockItems() {
   <BODY>
     <DESC>
       <STATICVARIABLES>
-        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
         <SVCURRENTCOMPANY>${COMPANY}</SVCURRENTCOMPANY>
       </STATICVARIABLES>
       <TDL>
@@ -78,20 +77,25 @@ async function getAllStockItems() {
   // Debug: show raw response so we can verify Tally's XML shape
   console.log("[DEBUG] Tally raw (first 800 chars):\n", response.slice(0, 800));
 
-  if (response.includes("UNKNOWN") || response.includes("Error")) {
-    throw new Error("Tally rejected stock items request: " + response.slice(0, 200));
+  if (response.includes("UNKNOWN") || response.includes("LINEERROR")) {
+    throw new Error("Tally rejected request: " + response.slice(0, 300));
   }
 
-  // TallyPrime returns <NAME.LIST TYPE="String"><NAME>ItemName</NAME></NAME.LIST>
-  // or sometimes just <NAME>ItemName</NAME> inside each STOCKITEM
-  const names = [];
-  const re = /<NAME>([^<]+)<\/NAME>/gi;
+  // TallyPrime may return names as:
+  //   <STOCKITEM NAME="ItemName"> attributes, OR
+  //   <NAME>ItemName</NAME> elements inside each object
+  const names = new Set();
+
+  // Try attribute form: NAME="..."
+  const attrRe = /(?:STOCKITEM|ITEM)\s+NAME="([^"]+)"/gi;
   let m;
-  while ((m = re.exec(response)) !== null) {
-    const n = m[1].trim();
-    if (n) names.push(n);
-  }
-  return [...new Set(names)]; // dedupe
+  while ((m = attrRe.exec(response)) !== null) names.add(m[1].trim());
+
+  // Try element form: <NAME>...</NAME>
+  const elemRe = /<NAME>([^<]+)<\/NAME>/gi;
+  while ((m = elemRe.exec(response)) !== null) names.add(m[1].trim());
+
+  return [...names].filter(Boolean);
 }
 
 // ── Ping: simple collection request, no file I/O ─────────────
