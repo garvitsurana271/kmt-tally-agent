@@ -1,0 +1,15 @@
+{
+  "tally": {
+    "host": "localhost",
+    "port": 9000,
+    "company": "The Kothari Multitrade (F Y 25-26)"
+  },
+  "supabase": {
+    "url": "https://cyxdyqinnetcbrlnpgyx.supabase.co",
+    "serviceRoleKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN5eGR5cWlubmV0Y2JybG5wZ3l4Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDU5ODA2OCwiZXhwIjoyMDkwMTc0MDY4fQ.q2Bd-CWk7aOvZ8cqRR5RJtadrJ9RazvIbjVw3xUvDn0"
+  },
+  "sync": {
+    "intervalSeconds": 30,
+    "batchSize": 50
+  }
+}
