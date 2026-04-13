@@ -149,8 +149,9 @@ async function getDealerLedgers() {
     throw new Error("Tally rejected dealer request: " + response.slice(0, 300));
   }
 
-  // Debug first run
-  console.log("[DEBUG] Dealer response (first 1000 chars):\n", response.slice(0, 1000));
+  // Debug: print first LEDGER block to see actual tag names
+  const firstBlock = /<LEDGER\s[^>]+>[\s\S]*?<\/LEDGER>/i.exec(response);
+  if (firstBlock) console.log("[DEBUG] First LEDGER block:\n", firstBlock[0].slice(0, 2000));
 
   // Parse each LEDGER block
   const dealers = [];
