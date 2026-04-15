@@ -1,9 +1,41 @@
 /**
  * Supabase client for the Tally agent (service role — office PC only).
+ *
+ * Credentials are loaded in order:
+ *   1. SUPABASE_SERVICE_ROLE_KEY environment variable (set in a .env file or shell)
+ *   2. config.json supabase.serviceRoleKey field (legacy, not committed to git)
+ *
+ * To set up: copy the service role key from Supabase → Project Settings → API
+ * and paste it into a .env file next to tally.js:
+ *   SUPABASE_SERVICE_ROLE_KEY=eyJ...
  */
 
+// Load .env file if present (no dependency needed — simple manual parse)
+const path = require("path");
+const fs   = require("fs");
+const envPath = path.join(__dirname, ".env");
+if (fs.existsSync(envPath)) {
+  for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (m && !process.env[m[1]]) process.env[m[1]] = m[2].replace(/^["']|["']$/g, "");
+  }
+}
+
 const https = require("https");
-const cfg   = require("./config.json").supabase;
+const rawCfg = require("./config.json").supabase;
+
+const cfg = {
+  url:            rawCfg.url,
+  serviceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || rawCfg.serviceRoleKey || "",
+};
+
+if (!cfg.serviceRoleKey) {
+  console.error(
+    "[FATAL] Supabase service role key not configured.\n" +
+    "Create tally-agent/.env with:\n  SUPABASE_SERVICE_ROLE_KEY=eyJ...\n"
+  );
+  process.exit(1);
+}
 
 // ── Base request ─────────────────────────────────────────────
 function request(method, path, body, extraHeaders) {

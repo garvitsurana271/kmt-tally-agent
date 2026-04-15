@@ -1,0 +1,23 @@
+{
+  "tally": {
+    "host": "localhost",
+    "port": 9000,
+    "company": "The Kothari Multitrade (F Y 25-26)",
+    "fyStart": "20250401",
+    "cashLedger": "Cash",
+    "bankLedger": "HDFC Bank",
+    "bankLedgers": {
+      "hdfc": "HDFC Bank",
+      "indian_bank": "Indian Bank",
+      "united_bank": "United Bank of India"
+    }
+  },
+  "supabase": {
+    "url": "https://cyxdyqinnetcbrlnpgyx.supabase.co",
+    "serviceRoleKey": ""
+  },
+  "sync": {
+    "intervalSeconds": 30,
+    "batchSize": 50
+  }
+}
